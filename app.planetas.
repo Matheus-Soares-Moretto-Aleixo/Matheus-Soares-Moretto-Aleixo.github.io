@@ -1,0 +1,210 @@
+import 'package:flutter/material.dart';
+import 'package:sqflite/sqflite.dart';
+import 'package:path/path.dart';
+
+// Aplicativo Flutter para gerenciamento de planetas em dispositivos móveis
+// Utiliza SQLite para persistência de dados
+
+void main() {
+  runApp(MyApp());
+}
+
+class MyApp extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'Gerenciador de Planetas',
+      theme: ThemeData(primarySwatch: Colors.blue),
+      home: PlanetListScreen(),
+    );
+  }
+}
+
+class DatabaseHelper {
+  static final DatabaseHelper instance = DatabaseHelper._init();
+  static Database? _database;
+
+  DatabaseHelper._init();
+
+  Future<Database> get database async {
+    if (_database != null) return _database!;
+    _database = await _initDB('planets.db');
+    return _database!;
+  }
+
+  Future<Database> _initDB(String filePath) async {
+    final dbPath = await getDatabasesPath();
+    final path = join(dbPath, filePath);
+
+    return await openDatabase(path, version: 1, onCreate: _createDB);
+  }
+
+  Future<void> _createDB(Database db, int version) async {
+    await db.execute('''
+      CREATE TABLE planets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        distance REAL NOT NULL,
+        size INTEGER NOT NULL,
+        nickname TEXT
+      )
+    ''');
+  }
+
+  Future<int> insertPlanet(Map<String, dynamic> planet) async {
+    final db = await instance.database;
+    return await db.insert('planets', planet);
+  }
+
+  Future<List<Map<String, dynamic>>> fetchPlanets() async {
+    final db = await instance.database;
+    return await db.query('planets');
+  }
+
+  Future<int> updatePlanet(Map<String, dynamic> planet) async {
+    final db = await instance.database;
+    return await db.update(
+      'planets',
+      planet,
+      where: 'id = ?',
+      whereArgs: [planet['id']],
+    );
+  }
+
+  Future<int> deletePlanet(int id) async {
+    final db = await instance.database;
+    return await db.delete('planets', where: 'id = ?', whereArgs: [id]);
+  }
+}
+
+class PlanetListScreen extends StatefulWidget {
+  @override
+  _PlanetListScreenState createState() => _PlanetListScreenState();
+}
+
+class _PlanetListScreenState extends State<PlanetListScreen> {
+  List<Map<String, dynamic>> planets = [];
+
+  void _loadPlanets() async {
+    final data = await DatabaseHelper.instance.fetchPlanets();
+    setState(() => planets = data);
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _loadPlanets();
+  }
+
+  void _deletePlanet(int id) async {
+    await DatabaseHelper.instance.deletePlanet(id);
+    _loadPlanets();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text('Planetas')),
+      body: ListView.builder(
+        itemCount: planets.length,
+        itemBuilder: (context, index) {
+          final planet = planets[index];
+          return ListTile(
+            title: Text(planet['name']),
+            subtitle: Text(planet['nickname'] ?? 'Sem apelido'),
+            trailing: IconButton(
+              icon: Icon(Icons.delete, color: Colors.red),
+              onPressed: () => _deletePlanet(planet['id']),
+            ),
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => PlanetFormScreen(planet: planet),
+                ),
+              ).then((_) => _loadPlanets());
+            },
+          );
+        },
+      ),
+      floatingActionButton: FloatingActionButton(
+        child: Icon(Icons.add),
+        onPressed: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (context) => PlanetFormScreen()),
+          ).then((_) => _loadPlanets());
+        },
+      ),
+    );
+  }
+}
+
+class PlanetFormScreen extends StatefulWidget {
+  final Map<String, dynamic>? planet;
+  PlanetFormScreen({this.planet});
+
+  @override
+  _PlanetFormScreenState createState() => _PlanetFormScreenState();
+}
+
+class _PlanetFormScreenState extends State<PlanetFormScreen> {
+  final _formKey = GlobalKey<FormState>();
+  final TextEditingController _nameController = TextEditingController();
+  final TextEditingController _distanceController = TextEditingController();
+  final TextEditingController _sizeController = TextEditingController();
+  final TextEditingController _nicknameController = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.planet != null) {
+      _nameController.text = widget.planet!['name'];
+      _distanceController.text = widget.planet!['distance'].toString();
+      _sizeController.text = widget.planet!['size'].toString();
+      _nicknameController.text = widget.planet!['nickname'] ?? '';
+    }
+  }
+
+  void _savePlanet() async {
+    if (_formKey.currentState!.validate()) {
+      final planet = {
+        'name': _nameController.text,
+        'distance': double.parse(_distanceController.text),
+        'size': int.parse(_sizeController.text),
+        'nickname': _nicknameController.text.isEmpty ? null : _nicknameController.text,
+      };
+      if (widget.planet == null) {
+        await DatabaseHelper.instance.insertPlanet(planet);
+      } else {
+        planet['id'] = widget.planet!['id'];
+        await DatabaseHelper.instance.updatePlanet(planet);
+      }
+      Navigator.pop(context);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text(widget.planet == null ? 'Adicionar Planeta' : 'Editar Planeta')),
+      body: Padding(
+        padding: EdgeInsets.all(16.0),
+        child: Form(
+          key: _formKey,
+          child: Column(
+            children: [
+              // Campos de entrada do formulário
+              TextFormField(controller: _nameController, decoration: InputDecoration(labelText: 'Nome'), validator: (value) => value!.isEmpty ? 'Campo obrigatório' : null),
+              TextFormField(controller: _distanceController, decoration: InputDecoration(labelText: 'Distância (UA)'), keyboardType: TextInputType.number, validator: (value) => double.tryParse(value!) == null || double.parse(value) <= 0 ? 'Valor inválido' : null),
+              TextFormField(controller: _sizeController, decoration: InputDecoration(labelText: 'Tamanho (km)'), keyboardType: TextInputType.number, validator: (value) => int.tryParse(value!) == null || int.parse(value) <= 0 ? 'Valor inválido' : null),
+              TextFormField(controller: _nicknameController, decoration: InputDecoration(labelText: 'Apelido')),
+              SizedBox(height: 20),
+              ElevatedButton(onPressed: _savePlanet, child: Text('Salvar')),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
